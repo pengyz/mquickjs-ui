@@ -1,0 +1,8 @@
+# 独立（standalone）开发构建配置。
+#
+# OpenVela 树内构建（mqjs/lvgldemo 作为依赖）时，本文件不在 cargo 配置查找
+# 链上，由消费方 app 的 .cargo/config.toml 提供等价 env——两处约定一致。
+
+[env]
+# mquickjs-sys build.rs 的产物定位（相对本 config 目录）。
+MQUICKJS_BUILD_TOML = { value = "../mquickjs-rs-sdk/mquickjs.build.toml", relative = true }

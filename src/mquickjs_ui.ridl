@@ -1,0 +1,14 @@
+mode strict;
+
+// LVGL 组件绑定（v0.1：Label + Button；后端经 vtable 注入，见 src/backend.rs）。
+// 语义：new Label() 在默认屏创建 lv_label；setText 更新；onClick 注册点击回调
+//（经 mquickjs-rs 回调桥同步触发）。
+
+class Label {
+    fn setText(text: string) -> void;
+}
+
+class Button {
+    fn setText(text: string) -> void;
+    fn onClick(cb: callback()) -> void;
+}
