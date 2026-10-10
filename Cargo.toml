@@ -10,5 +10,13 @@ license = "Apache-2.0"
 # （OpenVela 树内：external/mquickjs-rs-sdk 与 external/mquickjs-ui）。
 mquickjs-rs = { path = "../mquickjs-rs-sdk/deps/mquickjs-rs", features = ["ridl-extensions"] }
 
+[dev-dependencies]
+# 测试环境镜像真实 app 形态：框架的 ridl 变体 C stdlib（--whole-archive
+# 链入测试二进制，见 build.rs）强引用 console 单例的 C 入口，其实现是
+# stdlib 模块 crate 的 Rust 胶水——库本体不依赖它（RIDL 类无需 console），
+# 仅测试二进制需要。
+stdlib = { path = "../mquickjs-rs-sdk/ridl-modules/stdlib", features = ["std"] }
+
 [build-dependencies]
 mquickjs-rs = { path = "../mquickjs-rs-sdk/deps/mquickjs-rs" }
+mquickjs-ridl-glue = { path = "../mquickjs-rs-sdk/deps/mquickjs-ridl-glue" }

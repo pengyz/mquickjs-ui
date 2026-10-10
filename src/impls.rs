@@ -10,9 +10,8 @@ use std::ffi::CString;
 
 fn cstr(s: &str) -> CString {
     // 内嵌/开发者字符串含 NUL 属于编程错误：截断即可（不 panic 保 UI 线程）。
-    let mut v = s.into_bytes();
+    let mut v = s.as_bytes().to_vec();
     v.retain(|&b| b != 0);
-    let mut v = v;
     v.push(0);
     unsafe { CString::from_vec_unchecked(v) }
 }

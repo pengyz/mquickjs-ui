@@ -7,7 +7,10 @@
 //!
 //! 事件链路：`btn.onClick(fn)` → 回调桥（mquickjs-rs CallbackRegistry，
 //! JSGCRef 持有 + 同步 many-shot + 异常受控）→ 后端 `set_on_click(obj,
-//! handle)`；LVGL 事件触发时后端调用 [`backend::dispatch_click`] 回到 JS。
+//! handle)`；LVGL 事件触发时后端调用 [`backend::dispatch_click`]（显式
+//! 携带 `JSContext*`——eval 返回后 TLS current 栈为空，事件回程只能走
+//! from_js_ctx）回到 JS；widget 销毁时后端调 [`backend::mqjs_ui_callback_release`]
+//! 注销句柄、释放 JSGCRef 槽位。
 
 mquickjs_rs::ridl_include_module!();
 

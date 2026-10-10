@@ -41,27 +41,85 @@ pub fn with<R>(f: impl FnOnce(&LvglBackend) -> R) -> Option<R> {
     Some(f(unsafe { &*ptr }))
 }
 
+/// C 侧后端装配入口：宿主 app 用四个 C 函数指针注入 vtable（与
+/// [`attach`] 同语义，供无 Rust 绑定的 LVGL 宿主一次性调用）。
+///
+/// # Safety
+/// 四个函数指针必须非空，且其 C 实现满足 `LvglBackend` 字段注释的契约
+/// （线程约定：全部只在 LVGL/JS 共用线程上调用）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mqjs_ui_backend_attach(
+    create_label: unsafe extern "C" fn(text: *const c_char) -> *mut c_void,
+    create_button: unsafe extern "C" fn(text: *const c_char) -> *mut c_void,
+    set_text: unsafe extern "C" fn(obj: *mut c_void, text: *const c_char),
+    set_on_click: unsafe extern "C" fn(obj: *mut c_void, handle: u32),
+) {
+    attach(LvglBackend {
+        create_label,
+        create_button,
+        set_text,
+        set_on_click,
+    });
+}
+
 /// 导出给 C 后端 trampoline：点击事件回程（LVGL → 回调桥 → JS）。
 ///
 /// # Safety
-/// `handle` 必须是此前 `onClick` 注册时经 `CallbackHandle::raw()` 传入的
-/// 句柄；宿主需保证本函数仅在 JS 线程（引擎所在线程）调用。
-#[no_mangle]
-pub unsafe extern "C" fn mqjs_ui_dispatch_click(handle: u32) {
-    dispatch_click(handle);
+/// - `ctx` 必须是存活的 `JSContext*`（由 `mquickjs_rs::Context::new` 创建、
+///   user_data 已设置——即经 adapter 三件套创建的 context），且本函数仅在
+///   该 context 销毁前调用；
+/// - `handle` 必须是此前 `onClick` 注册时经 `CallbackHandle::raw()` 传入的
+///   句柄；宿主需保证本函数仅在 JS 线程（引擎所在线程）调用。
+///
+/// 为什么显式携带 `ctx` 而不是依赖 `ContextToken::current()`：后者读的是
+/// `enter_current()` 维护的 TLS 栈，而 LVGL 事件回调发生在 eval 返回之后
+/// （TLS 栈为空）——显式传 ctx 是事件回程唯一可靠的 context 来源。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mqjs_ui_dispatch_click(ctx: *mut c_void, handle: u32) {
+    dispatch_click(ctx, handle);
 }
 
 /// Rust 侧触发入口（与 extern "C" 版本同语义）。
-pub fn dispatch_click(handle: u32) {
-    let Some(h) = mquickjs_rs::context::ContextToken::current() else {
-        eprintln!("mquickjs-ui: dispatch_click but no live context");
+pub fn dispatch_click(ctx: *mut c_void, handle: u32) {
+    invoke_callback(ctx, handle);
+}
+
+/// 导出给 C 后端：widget 销毁（LV_EVENT_DELETE）时注销回调句柄，释放
+/// 回调桥的 JSGCRef 槽位。ctx 约束同 [`mqjs_ui_dispatch_click`]。
+///
+/// 句柄不存在时静默返回（幂等；重复 DELETE/双注册场景不 panic）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mqjs_ui_callback_release(ctx: *mut c_void, handle: u32) {
+    let Some(token) = (unsafe {
+        mquickjs_rs::context::ContextToken::from_js_ctx(ctx as *mut _)
+    }) else {
+        eprintln!("mquickjs-ui: callback_release but ctx has no RIDL user_data");
         return;
     };
-    if let Err(e) = h.callbacks().invoke(
-        mquickjs_rs::CallbackHandle::from_raw(handle),
-        &[],
-    ) {
-        // 回调异常已由 registry 清除；此处仅保证错误可见。
-        eprintln!("mquickjs-ui: callback failed: {e}");
-    }
+    token
+        .callbacks()
+        .unregister(mquickjs_rs::CallbackHandle::from_raw(handle));
+}
+
+fn invoke_callback(ctx: *mut c_void, handle: u32) {
+    // SAFETY: 见 mqjs_ui_dispatch_click 的 Safety 契约。
+    let Some(token) = (unsafe {
+        mquickjs_rs::context::ContextToken::from_js_ctx(ctx as *mut _)
+    }) else {
+        eprintln!("mquickjs-ui: dispatch_click but ctx has no RIDL user_data");
+        return;
+    };
+    // 回调执行期间把该 context 压入 TLS current 栈：回调体内经
+    // `ContextToken::current()` 取 context 的实现（如 stdlib console 的
+    // print_js_values）才能工作——eval 路径有 enter_current 语义，事件
+    // 回程必须由桥补齐同样的语义，否则静默 no-op。
+    token.with_current(|| {
+        if let Err(e) = token
+            .callbacks()
+            .invoke(mquickjs_rs::CallbackHandle::from_raw(handle), &[])
+        {
+            // 回调异常已由 registry 清除；此处仅保证错误可见。
+            eprintln!("mquickjs-ui: callback failed: {e}");
+        }
+    });
 }
